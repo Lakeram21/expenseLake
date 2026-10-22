@@ -1,0 +1,259 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function activeMember(householdId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/households/$(householdId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/households/$(householdId)/members/$(request.auth.uid)).data.active == true;
+    }
+
+    function activeMemberAfter(householdId) {
+      return signedIn()
+        && existsAfter(/databases/$(database)/documents/households/$(householdId)/members/$(request.auth.uid))
+        && getAfter(/databases/$(database)/documents/households/$(householdId)/members/$(request.auth.uid)).data.active == true;
+    }
+
+    function householdOwner(householdId) {
+      return activeMember(householdId)
+        && get(/databases/$(database)/documents/households/$(householdId)/members/$(request.auth.uid)).data.role == 'owner';
+    }
+
+    function validCategory(householdId, categoryId) {
+      return categoryId in ['groceries', 'dining', 'transport', 'home', 'utilities', 'health', 'shopping', 'entertainment', 'other']
+        || (
+          categoryId is string
+          && exists(/databases/$(database)/documents/households/$(householdId)/categories/$(categoryId))
+          && get(/databases/$(database)/documents/households/$(householdId)/categories/$(categoryId)).data.active == true
+        );
+    }
+
+    function validExpense(data, householdId) {
+      return data.keys().hasAll([
+          'amountMinor', 'currency', 'merchant', 'categoryId', 'expenseDate',
+          'paymentMethod', 'source', 'receiptPath', 'notes', 'createdBy',
+          'createdByName', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'amountMinor', 'currency', 'merchant', 'categoryId', 'expenseDate',
+          'paymentMethod', 'source', 'receiptPath', 'notes', 'createdBy',
+          'createdByName', 'createdAt', 'updatedAt', 'receiptDraftId'
+        ])
+        && data.amountMinor is int && data.amountMinor > 0 && data.amountMinor <= 100000000
+        && data.currency == 'MXN'
+        && (data.merchant == null || (data.merchant is string && data.merchant.size() <= 120))
+        && validCategory(householdId, data.categoryId)
+        && data.expenseDate is string && data.expenseDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')
+        && (data.paymentMethod == null || data.paymentMethod in ['cash', 'debit_card', 'credit_card', 'bank_transfer', 'other'])
+        && data.source in ['manual', 'receipt']
+        && (data.receiptPath == null || (data.receiptPath is string && data.receiptPath.matches('^households/[A-Za-z0-9_-]+/receipts/[A-Za-z0-9-]+/[A-Za-z0-9-]+$')))
+        && data.notes is string && data.notes.size() <= 500
+        && data.createdBy is string
+        && data.createdByName is string && data.createdByName.size() <= 120
+        && data.createdAt is timestamp && data.updatedAt is timestamp;
+    }
+
+    function validBudget(data, budgetId, householdId) {
+      return data.keys().hasOnly(['month', 'categoryId', 'limitMinor', 'currency', 'updatedAt'])
+        && data.keys().hasAll(['month', 'categoryId', 'limitMinor', 'currency', 'updatedAt'])
+        && data.month is string && data.month.matches('^[0-9]{4}-(0[1-9]|1[0-2])$')
+        && (data.categoryId == 'overall' || validCategory(householdId, data.categoryId))
+        && budgetId == data.month + '_' + data.categoryId
+        && data.limitMinor is int && data.limitMinor > 0 && data.limitMinor <= 100000000
+        && data.currency == 'MXN'
+        && data.updatedAt is timestamp;
+    }
+
+    match /users/{uid} {
+      allow get: if signedIn() && (
+        request.auth.uid == uid
+        || (resource.data.defaultHouseholdId is string && activeMember(resource.data.defaultHouseholdId))
+      );
+      allow list: if false;
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['displayName', 'email', 'defaultHouseholdId', 'createdAt', 'updatedAt'])
+        && request.resource.data.displayName is string
+        && request.resource.data.email is string
+        && request.resource.data.defaultHouseholdId is string
+        && activeMemberAfter(request.resource.data.defaultHouseholdId);
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'email', 'defaultHouseholdId', 'updatedAt'])
+        && (request.resource.data.defaultHouseholdId == null || activeMemberAfter(request.resource.data.defaultHouseholdId));
+      allow delete: if false;
+
+      match /receiptProcessing/{lockId} {
+        allow get: if signedIn() && request.auth.uid == uid && lockId == 'current';
+        allow list: if false;
+        allow create: if signedIn() && request.auth.uid == uid && lockId == 'current'
+          && request.resource.data.keys().hasOnly(['lockId', 'createdAt', 'expiresAt'])
+          && request.resource.data.lockId is string
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.expiresAt is timestamp
+          && request.resource.data.expiresAt > request.time
+          && request.resource.data.expiresAt <= request.time + duration.value(15, 'm');
+        allow update: if signedIn() && request.auth.uid == uid && lockId == 'current'
+          && resource.data.expiresAt <= request.time
+          && request.resource.data.keys().hasOnly(['lockId', 'createdAt', 'expiresAt'])
+          && request.resource.data.lockId is string
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.expiresAt is timestamp
+          && request.resource.data.expiresAt > request.time
+          && request.resource.data.expiresAt <= request.time + duration.value(15, 'm');
+        allow delete: if signedIn() && request.auth.uid == uid && lockId == 'current';
+      }
+    }
+
+    match /households/{householdId} {
+      allow get, list: if activeMember(householdId);
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['name', 'ownerUid', 'memberCount', 'currency', 'createdAt', 'updatedAt'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.memberCount == 1
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 80
+        && request.resource.data.currency == 'MXN'
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if (
+          householdOwner(householdId)
+          && (
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'updatedAt'])
+            && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 80
+            && request.resource.data.updatedAt == request.time
+          )
+        )
+        || (
+            signedIn()
+            && resource.data.memberCount == 1
+            && request.resource.data.memberCount == 2
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberCount', 'updatedAt'])
+            && request.resource.data.updatedAt == request.time
+            && existsAfter(/databases/$(database)/documents/households/$(householdId)/members/$(request.auth.uid))
+            && getAfter(/databases/$(database)/documents/households/$(householdId)/members/$(request.auth.uid)).data.role == 'member'
+            && existsAfter(/databases/$(database)/documents/householdInvitations/$(getAfter(/databases/$(database)/documents/households/$(householdId)/members/$(request.auth.uid)).data.invitationId))
+            && getAfter(/databases/$(database)/documents/householdInvitations/$(getAfter(/databases/$(database)/documents/households/$(householdId)/members/$(request.auth.uid)).data.invitationId)).data.householdId == householdId
+            && getAfter(/databases/$(database)/documents/householdInvitations/$(getAfter(/databases/$(database)/documents/households/$(householdId)/members/$(request.auth.uid)).data.invitationId)).data.status == 'accepted'
+            && getAfter(/databases/$(database)/documents/householdInvitations/$(getAfter(/databases/$(database)/documents/households/$(householdId)/members/$(request.auth.uid)).data.invitationId)).data.acceptedBy == request.auth.uid
+        );
+      allow delete: if false;
+
+      match /members/{uid} {
+        allow get, list: if activeMember(householdId);
+        allow create: if (
+          signedIn() && request.auth.uid == uid
+          && get(/databases/$(database)/documents/households/$(householdId)).data.ownerUid == uid
+          && request.resource.data.keys().hasOnly(['role', 'active', 'joinedAt'])
+          && request.resource.data.role == 'owner'
+          && request.resource.data.active == true
+          && request.resource.data.joinedAt == request.time
+        ) || (
+          signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['role', 'active', 'joinedAt', 'invitationId'])
+          && request.resource.data.role == 'member'
+          && request.resource.data.active == true
+          && request.resource.data.joinedAt == request.time
+          && request.resource.data.invitationId is string
+          && existsAfter(/databases/$(database)/documents/householdInvitations/$(request.resource.data.invitationId))
+          && getAfter(/databases/$(database)/documents/householdInvitations/$(request.resource.data.invitationId)).data.status == 'accepted'
+          && getAfter(/databases/$(database)/documents/householdInvitations/$(request.resource.data.invitationId)).data.householdId == householdId
+          && getAfter(/databases/$(database)/documents/householdInvitations/$(request.resource.data.invitationId)).data.acceptedBy == uid
+          && getAfter(/databases/$(database)/documents/households/$(householdId)).data.memberCount == 2
+        );
+        allow update, delete: if false;
+      }
+
+      match /expenses/{expenseId} {
+        allow get, list: if activeMember(householdId);
+        allow create: if activeMember(householdId)
+          && request.resource.data.source in ['manual', 'receipt']
+          && request.resource.data.receiptPath == null
+          && !request.resource.data.keys().hasAny(['receiptDraftId'])
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time
+          && validExpense(request.resource.data, householdId);
+        allow update: if activeMember(householdId)
+          && resource.data.createdBy == request.auth.uid
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'amountMinor', 'merchant', 'categoryId', 'expenseDate',
+            'paymentMethod', 'notes', 'updatedAt'
+          ])
+          && validExpense(request.resource.data, householdId);
+        allow delete: if activeMember(householdId)
+          && resource.data.createdBy == request.auth.uid
+          && resource.data.source in ['manual', 'receipt'];
+      }
+
+      match /budgets/{budgetId} {
+        allow get, list: if activeMember(householdId);
+        allow create, update: if activeMember(householdId)
+          && request.resource.data.updatedAt == request.time
+          && validBudget(request.resource.data, budgetId, householdId);
+        allow delete: if householdOwner(householdId);
+      }
+
+      match /categories/{categoryId} {
+        allow get, list: if activeMember(householdId);
+        allow create: if activeMember(householdId)
+          && categoryId.matches('^custom_[A-Za-z0-9_-]{1,64}$')
+          && request.resource.data.keys().hasOnly(['name', 'icon', 'color', 'active', 'sortOrder', 'createdAt'])
+          && request.resource.data.name is string && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 40
+          && request.resource.data.icon is string && request.resource.data.icon.size() > 0 && request.resource.data.icon.size() <= 16
+          && request.resource.data.color is string && request.resource.data.color.matches('^#[0-9A-Fa-f]{6}$')
+          && request.resource.data.active == true
+          && request.resource.data.sortOrder is int
+          && request.resource.data.createdAt == request.time;
+        allow update: if householdOwner(householdId)
+          && request.resource.data.keys().hasOnly(['name', 'icon', 'color', 'active', 'sortOrder', 'createdAt'])
+          && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 50
+          && request.resource.data.icon is string && request.resource.data.icon.size() > 0 && request.resource.data.icon.size() <= 16
+          && (!request.resource.data.keys().hasAny(['color']) || request.resource.data.color.matches('^#[0-9A-Fa-f]{6}$'))
+          && request.resource.data.active == true
+          && request.resource.data.sortOrder is int;
+        allow delete: if false;
+      }
+
+      match /receiptDrafts/{draftId} {
+        allow read, write: if false;
+      }
+    }
+
+    match /householdInvitations/{invitationId} {
+      allow get: if signedIn()
+        && resource.data.email == request.auth.token.email
+        && resource.data.status == 'pending'
+        && resource.data.expiresAt is timestamp
+        && resource.data.expiresAt > request.time;
+      allow list: if false;
+      allow create: if householdOwner(request.resource.data.householdId)
+        && invitationId.matches('^[a-f0-9]{64}$')
+        && request.resource.data.keys().hasOnly(['householdId', 'email', 'createdBy', 'createdAt', 'expiresAt', 'status'])
+        && request.resource.data.email is string
+        && request.resource.data.email.size() > 0
+        && request.resource.data.email.size() <= 254
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.expiresAt <= request.time + duration.value(8, 'd')
+        && request.resource.data.status == 'pending'
+        && get(/databases/$(database)/documents/households/$(request.resource.data.householdId)).data.memberCount == 1;
+      allow update: if signedIn()
+        && resource.data.status == 'pending'
+        && resource.data.expiresAt is timestamp
+        && resource.data.expiresAt > request.time
+        && resource.data.email == request.auth.token.email
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedBy', 'acceptedAt'])
+        && request.resource.data.status == 'accepted'
+        && request.resource.data.acceptedBy == request.auth.uid
+        && request.resource.data.acceptedAt == request.time
+        && existsAfter(/databases/$(database)/documents/households/$(resource.data.householdId)/members/$(request.auth.uid))
+        && getAfter(/databases/$(database)/documents/households/$(resource.data.householdId)/members/$(request.auth.uid)).data.invitationId == invitationId;
+    }
+  }
+}

@@ -1,0 +1,22 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function activeMember(householdId) {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/households/$(householdId)/members/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/households/$(householdId)/members/$(request.auth.uid)).data.active == true;
+    }
+
+    match /households/{householdId}/receipts/{draftId}/{fileName} {
+      allow read: if activeMember(householdId);
+      allow create, update: if activeMember(householdId)
+        && draftId.matches('^[A-Za-z0-9-]{20,40}$')
+        && fileName == draftId
+        && request.resource.size > 0
+        && request.resource.size <= 8 * 1024 * 1024
+        && request.resource.contentType in ['image/jpeg', 'image/png', 'image/webp']
+        && request.resource.metadata.uploadedBy == request.auth.uid;
+      allow delete: if activeMember(householdId) && resource.metadata.uploadedBy == request.auth.uid;
+    }
+  }
+}

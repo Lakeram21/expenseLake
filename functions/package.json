@@ -1,0 +1,25 @@
+{
+  "name": "expenselake-functions",
+  "private": true,
+  "main": "lib/index.js",
+  "engines": { "node": "20" },
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src",
+    "test": "vitest run src/**/*.test.ts"
+  },
+  "dependencies": {
+    "firebase-admin": "13.10.0",
+    "firebase-functions": "7.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "5.7.2",
+    "vitest": "5.0.5",
+    "vite": "8.3.5"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "1.14.6",
+    "uuid": "11.1.1"
+  }
+}

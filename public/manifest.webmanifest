@@ -1,0 +1,12 @@
+{
+  "name": "Expenselake — Household budget",
+  "short_name": "Expenselake",
+  "description": "A calm, shared household budget for every peso.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f8f5",
+  "theme_color": "#315c47",
+  "icons": [
+    { "src": "/icons/leaf.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
