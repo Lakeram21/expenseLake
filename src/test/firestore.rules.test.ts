@@ -64,6 +64,113 @@ describe.skipIf(!emulatorConfigured)("Firestore household security rules", () =>
     await assertSucceeds(deleteDoc(expense));
   });
 
+  it("allows linked investment contributions only to an account in the household", async () => {
+    const firestore = environment.authenticatedContext("member").firestore();
+    await assertSucceeds(setDoc(doc(firestore, "households/home/investmentAccounts/cetes"), {
+      name: "Cetesdirecto",
+      type: "government_bonds",
+      provider: "Cetesdirecto",
+      notes: "",
+      createdAt: serverTimestamp(),
+    }));
+    await assertSucceeds(setDoc(doc(firestore, "households/home/expenses/investment"), {
+      amountMinor: 10000, currency: "MXN", merchant: "CETES", categoryId: "investments",
+      investmentAccountId: "cetes", expenseDate: "2026-10-22", paymentMethod: "bank_transfer",
+      source: "manual", receiptPath: null, notes: "", createdBy: "member", createdByName: "Member",
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(setDoc(doc(firestore, "households/home/investmentValuations/value"), {
+      accountId: "cetes", valueMinor: 10500, valuationDate: "2026-10-22", createdAt: serverTimestamp(),
+    }));
+    const holdingRef = doc(firestore, "households/home/investmentHoldings/udibono-2031");
+    await assertSucceeds(setDoc(holdingRef, {
+      accountId: "cetes", name: "Udibono 2031", kind: "udibono", ticker: "",
+      currency: "MXN", incomeFrequency: "semiannual", nextPaymentDate: "2026-10-23",
+      amountInvestedMinor: 10000, currentValueMinor: 10500, currentValueDate: "2026-10-22",
+      notes: "", createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(setDoc(doc(firestore, "households/home/expenses/asset-contribution"), {
+      amountMinor: 2500, currency: "MXN", merchant: "ETF buy", categoryId: "investments",
+      investmentAccountId: "cetes", investmentHoldingId: "udibono-2031",
+      expenseDate: "2026-10-22", paymentMethod: "bank_transfer",
+      source: "manual", receiptPath: null, notes: "", createdBy: "member", createdByName: "Member",
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(firestore, "households/home/expenses/mismatched-asset-contribution"), {
+      amountMinor: 2500, currency: "MXN", merchant: "ETF buy", categoryId: "investments",
+      investmentAccountId: "cetes", investmentHoldingId: "missing",
+      expenseDate: "2026-10-22", paymentMethod: "bank_transfer",
+      source: "manual", receiptPath: null, notes: "", createdBy: "member", createdByName: "Member",
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(updateDoc(holdingRef, {
+      currentValueMinor: 11000, currentValueDate: "2026-10-23", updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(setDoc(doc(firestore, "households/home/investmentHoldings/land-1"), {
+      accountId: "cetes", name: "Parcel 1", kind: "land", ticker: "",
+      currency: "MXN", incomeFrequency: "none", nextPaymentDate: null,
+      amountInvestedMinor: 100000, currentValueMinor: 120000, currentValueDate: "2026-10-22",
+      notes: "", createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(firestore, "households/home/investmentHoldings/invalid-udibono"), {
+      accountId: "cetes", name: "Udibono invalid cadence", kind: "udibono", ticker: "",
+      currency: "MXN", incomeFrequency: "monthly", nextPaymentDate: "2026-11-23",
+      amountInvestedMinor: 10000, currentValueMinor: 10000, currentValueDate: "2026-10-22",
+      notes: "", createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertSucceeds(setDoc(doc(firestore, "households/home/investmentIncome/coupon"), {
+      accountId: "cetes", holdingId: "udibono-2031", type: "coupon", amountMinor: 12000,
+      currency: "MXN", expectedDate: "2026-10-23", receivedDate: "2026-10-23",
+      reinvested: false, notes: "", createdAt: serverTimestamp(),
+    }));
+    await assertSucceeds(updateDoc(holdingRef, {
+      nextPaymentDate: "2027-04-23",
+      updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(firestore, "households/other/investmentIncome/foreign"), {
+      accountId: "cetes", holdingId: "udibono-2031", type: "coupon", amountMinor: 1,
+      currency: "MXN", expectedDate: "2026-10-23", receivedDate: "2026-10-23",
+      reinvested: false, notes: "", createdAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(firestore, "households/home/investmentIncome/invalid"), {
+      accountId: "cetes", holdingId: "missing", type: "coupon", amountMinor: 1,
+      currency: "MXN", expectedDate: "2026-10-23", receivedDate: "2026-10-23",
+      reinvested: false, notes: "", createdAt: serverTimestamp(),
+    }));
+    await assertSucceeds(setDoc(doc(firestore, "households/home/expenses/marked-investment"), {
+      amountMinor: 10000, currency: "MXN", merchant: "Transfer", categoryId: "other",
+      investmentAccountId: "cetes", expenseDate: "2026-10-22", paymentMethod: null,
+      source: "manual", receiptPath: null, notes: "", createdBy: "member", createdByName: "Member",
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(firestore, "households/home/expenses/unlinked-investment"), {
+      amountMinor: 10000, currency: "MXN", merchant: "CETES", categoryId: "investments",
+      investmentAccountId: null, expenseDate: "2026-10-22", paymentMethod: null,
+      source: "manual", receiptPath: null, notes: "", createdBy: "member", createdByName: "Member",
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(firestore, "households/home/expenses/unknown-account"), {
+      amountMinor: 10000, currency: "MXN", merchant: "Transfer", categoryId: "other",
+      investmentAccountId: "missing", expenseDate: "2026-10-22", paymentMethod: null,
+      source: "manual", receiptPath: null, notes: "", createdBy: "member", createdByName: "Member",
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+    }));
+    await assertFails(setDoc(doc(firestore, "households/other/investmentAccounts/foreign"), {
+      name: "Foreign", type: "other", provider: "", notes: "", createdAt: serverTimestamp(),
+    }));
+    const strangerFirestore = environment.authenticatedContext("stranger").firestore();
+    await assertFails(deleteDoc(doc(strangerFirestore, "households/home/investmentAccounts/cetes")));
+
+    await assertSucceeds(deleteDoc(doc(firestore, "households/home/investmentIncome/coupon")));
+    await assertSucceeds(deleteDoc(holdingRef));
+    await assertSucceeds(deleteDoc(doc(firestore, "households/home/investmentHoldings/land-1")));
+    await assertSucceeds(deleteDoc(doc(firestore, "households/home/investmentValuations/value")));
+    await assertSucceeds(deleteDoc(doc(firestore, "households/home/expenses/investment")));
+    await assertSucceeds(deleteDoc(doc(firestore, "households/home/expenses/asset-contribution")));
+    await assertSucceeds(deleteDoc(doc(firestore, "households/home/expenses/marked-investment")));
+    await assertSucceeds(deleteDoc(doc(firestore, "households/home/investmentAccounts/cetes")));
+  });
+
   it("allows a confirmed receipt expense without storing an image path", async () => {
     const firestore = environment.authenticatedContext("member").firestore();
     await assertSucceeds(setDoc(doc(firestore, "households/home/expenses/receipt-expense"), {

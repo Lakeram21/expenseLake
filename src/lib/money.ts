@@ -1,14 +1,15 @@
 const MAX_AMOUNT_MINOR = 100_000_000;
+export const MAX_INVESTMENT_AMOUNT_MINOR = 100_000_000_000;
 
-export function parseAmountToMinor(value: string): number {
+export function parseAmountToMinor(value: string, maxAmountMinor = MAX_AMOUNT_MINOR): number {
   const normalized = value.trim().replace(/[$,\s]/g, "");
   if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) {
     throw new Error("Enter an amount with up to two decimal places.");
   }
   const [pesos, cents = ""] = normalized.split(".");
   const amountMinor = Number(pesos) * 100 + Number(cents.padEnd(2, "0"));
-  if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0 || amountMinor > MAX_AMOUNT_MINOR) {
-    throw new Error("Amount must be greater than zero and no more than MXN $1,000,000.");
+  if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0 || amountMinor > maxAmountMinor) {
+    throw new Error(`Amount must be greater than zero and no more than MXN $${(maxAmountMinor / 100).toLocaleString("en-US")}.`);
   }
   return amountMinor;
 }

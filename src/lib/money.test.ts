@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatMoney, formatMoneyInput, parseAmountToMinor } from "./money";
+import { formatMoney, formatMoneyInput, MAX_INVESTMENT_AMOUNT_MINOR, parseAmountToMinor } from "./money";
 
 describe("MXN centavo utilities", () => {
   it("converts pesos to integer centavos without floating point rounding", () => {
@@ -18,5 +18,10 @@ describe("MXN centavo utilities", () => {
   it("formats amounts and input values", () => {
     expect(formatMoneyInput(124850)).toBe("1248.50");
     expect(formatMoney(124850)).toContain("1,248.50");
+  });
+
+  it("supports larger amounts for linked investment contributions", () => {
+    expect(parseAmountToMinor("2500000", MAX_INVESTMENT_AMOUNT_MINOR)).toBe(250000000);
+    expect(() => parseAmountToMinor("2500000")).toThrow();
   });
 });

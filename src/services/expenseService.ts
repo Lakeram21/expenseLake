@@ -17,6 +17,8 @@ export interface ExpenseInput {
   amountMinor: number;
   merchant: string | null;
   categoryId: CategoryId;
+  investmentAccountId?: string | null;
+  investmentHoldingId?: string | null;
   expenseDate: string;
   paymentMethod: PaymentMethod | null;
   source?: "manual" | "receipt";
@@ -54,6 +56,8 @@ export async function createExpense(
     currency: "MXN",
     merchant: input.merchant?.trim() || null,
     categoryId: input.categoryId,
+    investmentAccountId: input.investmentAccountId ?? null,
+    investmentHoldingId: input.investmentHoldingId ?? null,
     expenseDate: input.expenseDate,
     paymentMethod: input.paymentMethod,
     source: input.source ?? "manual",
@@ -76,6 +80,8 @@ export async function updateExpense(
     amountMinor: input.amountMinor,
     merchant: input.merchant?.trim() || null,
     categoryId: input.categoryId,
+    investmentAccountId: input.investmentAccountId ?? null,
+    investmentHoldingId: input.investmentHoldingId ?? null,
     expenseDate: input.expenseDate,
     paymentMethod: input.paymentMethod,
     notes: input.notes?.trim() ?? "",

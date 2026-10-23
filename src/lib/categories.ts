@@ -9,6 +9,7 @@ export const CATEGORIES: Category[] = [
   { id: "health", name: "Health", icon: "💊", color: "#cd7e87" },
   { id: "shopping", name: "Shopping", icon: "🧺", color: "#7ea9a1" },
   { id: "entertainment", name: "Fun", icon: "🎟️", color: "#8984bd" },
+  { id: "investments", name: "Investments", icon: "📈", color: "#5d9670" },
   { id: "other", name: "Other", icon: "✳️", color: "#929b9a" },
 ];
 

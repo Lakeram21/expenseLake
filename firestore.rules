@@ -23,12 +23,23 @@ service cloud.firestore {
     }
 
     function validCategory(householdId, categoryId) {
-      return categoryId in ['groceries', 'dining', 'transport', 'home', 'utilities', 'health', 'shopping', 'entertainment', 'other']
+      return categoryId in ['groceries', 'dining', 'transport', 'home', 'utilities', 'health', 'shopping', 'entertainment', 'investments', 'other']
         || (
           categoryId is string
           && exists(/databases/$(database)/documents/households/$(householdId)/categories/$(categoryId))
           && get(/databases/$(database)/documents/households/$(householdId)/categories/$(categoryId)).data.active == true
         );
+    }
+
+    function validInvestmentAccount(householdId, accountId) {
+      return accountId is string
+        && exists(/databases/$(database)/documents/households/$(householdId)/investmentAccounts/$(accountId));
+    }
+
+    function validInvestmentHolding(householdId, accountId, holdingId) {
+      return holdingId is string
+        && exists(/databases/$(database)/documents/households/$(householdId)/investmentHoldings/$(holdingId))
+        && get(/databases/$(database)/documents/households/$(householdId)/investmentHoldings/$(holdingId)).data.accountId == accountId;
     }
 
     function validExpense(data, householdId) {
@@ -40,12 +51,27 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'amountMinor', 'currency', 'merchant', 'categoryId', 'expenseDate',
           'paymentMethod', 'source', 'receiptPath', 'notes', 'createdBy',
-          'createdByName', 'createdAt', 'updatedAt', 'receiptDraftId'
+          'createdByName', 'createdAt', 'updatedAt', 'receiptDraftId', 'investmentAccountId',
+          'investmentHoldingId'
         ])
-        && data.amountMinor is int && data.amountMinor > 0 && data.amountMinor <= 100000000
+        && data.amountMinor is int && data.amountMinor > 0
+        && (data.amountMinor <= 100000000
+          || (data.keys().hasAny(['investmentAccountId'])
+            && data.investmentAccountId is string
+            && data.amountMinor <= 100000000000))
         && data.currency == 'MXN'
         && (data.merchant == null || (data.merchant is string && data.merchant.size() <= 120))
         && validCategory(householdId, data.categoryId)
+        && (!data.keys().hasAny(['investmentAccountId'])
+          || data.investmentAccountId == null
+          || validInvestmentAccount(householdId, data.investmentAccountId))
+        && (!data.keys().hasAny(['investmentHoldingId'])
+          || data.investmentHoldingId == null
+          || (data.keys().hasAny(['investmentAccountId'])
+            && validInvestmentHolding(householdId, data.investmentAccountId, data.investmentHoldingId)))
+        && (data.categoryId != 'investments'
+          || (data.keys().hasAny(['investmentAccountId'])
+            && validInvestmentAccount(householdId, data.investmentAccountId)))
         && data.expenseDate is string && data.expenseDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')
         && (data.paymentMethod == null || data.paymentMethod in ['cash', 'debit_card', 'credit_card', 'bank_transfer', 'other'])
         && data.source in ['manual', 'receipt']
@@ -181,7 +207,7 @@ service cloud.firestore {
           && request.resource.data.updatedAt == request.time
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'amountMinor', 'merchant', 'categoryId', 'expenseDate',
-            'paymentMethod', 'notes', 'updatedAt'
+            'paymentMethod', 'notes', 'investmentAccountId', 'investmentHoldingId', 'updatedAt'
           ])
           && validExpense(request.resource.data, householdId);
         allow delete: if activeMember(householdId)
@@ -195,6 +221,120 @@ service cloud.firestore {
           && request.resource.data.updatedAt == request.time
           && validBudget(request.resource.data, budgetId, householdId);
         allow delete: if householdOwner(householdId);
+      }
+
+      match /investmentAccounts/{accountId} {
+        allow get, list: if activeMember(householdId);
+        allow create: if activeMember(householdId)
+          && request.resource.data.keys().hasOnly(['name', 'type', 'provider', 'notes', 'createdAt'])
+          && request.resource.data.keys().hasAll(['name', 'type', 'provider', 'notes', 'createdAt'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 60
+          && request.resource.data.type in ['government_bonds', 'brokerage', 'real_estate', 'other']
+          && request.resource.data.provider is string && request.resource.data.provider.size() <= 60
+          && request.resource.data.notes is string && request.resource.data.notes.size() <= 500
+          && request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if activeMember(householdId);
+      }
+
+      match /investmentValuations/{valuationId} {
+        allow get, list: if activeMember(householdId);
+        allow create: if activeMember(householdId)
+          && request.resource.data.keys().hasOnly(['accountId', 'valueMinor', 'valuationDate', 'createdAt'])
+          && request.resource.data.keys().hasAll(['accountId', 'valueMinor', 'valuationDate', 'createdAt'])
+          && validInvestmentAccount(householdId, request.resource.data.accountId)
+          && request.resource.data.valueMinor is int
+          && request.resource.data.valueMinor >= 0 && request.resource.data.valueMinor <= 100000000000
+          && request.resource.data.valuationDate is string
+          && request.resource.data.valuationDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')
+          && request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if activeMember(householdId);
+      }
+
+      match /investmentHoldings/{holdingId} {
+        allow get, list: if activeMember(householdId);
+        allow create: if activeMember(householdId)
+          && request.resource.data.keys().hasOnly([
+            'accountId', 'name', 'kind', 'ticker', 'currency', 'incomeFrequency',
+            'nextPaymentDate', 'amountInvestedMinor', 'currentValueMinor', 'currentValueDate',
+            'notes', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.keys().hasAll([
+            'accountId', 'name', 'kind', 'ticker', 'currency', 'incomeFrequency',
+            'nextPaymentDate', 'amountInvestedMinor', 'currentValueMinor', 'currentValueDate',
+            'notes', 'createdAt', 'updatedAt'
+          ])
+          && validInvestmentAccount(householdId, request.resource.data.accountId)
+          && request.resource.data.name is string
+          && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 80
+          && request.resource.data.kind in ['udibono', 'etf', 'land', 'real_estate', 'other']
+          && (request.resource.data.kind != 'udibono' || request.resource.data.incomeFrequency == 'semiannual')
+          && request.resource.data.ticker is string && request.resource.data.ticker.size() <= 15
+          && request.resource.data.currency is string && request.resource.data.currency.matches('^[A-Z]{3}$')
+          && request.resource.data.incomeFrequency in ['monthly', 'quarterly', 'semiannual', 'annual', 'manual', 'none']
+          && (request.resource.data.nextPaymentDate == null
+            || (request.resource.data.nextPaymentDate is string
+              && request.resource.data.nextPaymentDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')))
+          && (request.resource.data.incomeFrequency == 'none' || request.resource.data.nextPaymentDate is string)
+          && request.resource.data.amountInvestedMinor is int
+          && request.resource.data.amountInvestedMinor >= 0 && request.resource.data.amountInvestedMinor <= 100000000000
+          && request.resource.data.currentValueMinor is int
+          && request.resource.data.currentValueMinor >= 0 && request.resource.data.currentValueMinor <= 100000000000
+          && request.resource.data.currentValueDate is string
+          && request.resource.data.currentValueDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')
+          && request.resource.data.notes is string && request.resource.data.notes.size() <= 500
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+        allow update: if activeMember(householdId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'incomeFrequency', 'nextPaymentDate', 'currentValueMinor', 'currentValueDate', 'updatedAt'
+          ])
+          && request.resource.data.incomeFrequency in ['monthly', 'quarterly', 'semiannual', 'annual', 'manual', 'none']
+          && (resource.data.kind != 'udibono' || request.resource.data.incomeFrequency == 'semiannual')
+          && (request.resource.data.nextPaymentDate == null
+            || (request.resource.data.nextPaymentDate is string
+              && request.resource.data.nextPaymentDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')))
+          && (request.resource.data.incomeFrequency == 'none' || request.resource.data.nextPaymentDate is string)
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['currentValueMinor'])
+            || (request.resource.data.currentValueMinor is int
+              && request.resource.data.currentValueMinor >= 0
+              && request.resource.data.currentValueMinor <= 100000000000))
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['currentValueDate'])
+            || (request.resource.data.currentValueDate is string
+              && request.resource.data.currentValueDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')))
+          && request.resource.data.updatedAt == request.time;
+        allow delete: if activeMember(householdId);
+      }
+
+      match /investmentIncome/{incomeId} {
+        allow get, list: if activeMember(householdId);
+        allow create: if activeMember(householdId)
+          && request.resource.data.keys().hasOnly([
+            'accountId', 'holdingId', 'type', 'amountMinor', 'currency',
+            'expectedDate', 'receivedDate', 'reinvested', 'notes', 'createdAt'
+          ])
+          && request.resource.data.keys().hasAll([
+            'accountId', 'holdingId', 'type', 'amountMinor', 'currency',
+            'expectedDate', 'receivedDate', 'reinvested', 'notes', 'createdAt'
+          ])
+          && validInvestmentAccount(householdId, request.resource.data.accountId)
+          && exists(/databases/$(database)/documents/households/$(householdId)/investmentHoldings/$(request.resource.data.holdingId))
+          && get(/databases/$(database)/documents/households/$(householdId)/investmentHoldings/$(request.resource.data.holdingId)).data.accountId == request.resource.data.accountId
+          && request.resource.data.type in ['coupon', 'dividend', 'distribution', 'other']
+          && request.resource.data.amountMinor is int
+          && request.resource.data.amountMinor > 0 && request.resource.data.amountMinor <= 100000000000
+          && request.resource.data.currency is string && request.resource.data.currency.matches('^[A-Z]{3}$')
+          && request.resource.data.expectedDate is string
+          && request.resource.data.expectedDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')
+          && request.resource.data.receivedDate is string
+          && request.resource.data.receivedDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$')
+          && request.resource.data.reinvested is bool
+          && request.resource.data.notes is string && request.resource.data.notes.size() <= 500
+          && request.resource.data.createdAt == request.time;
+        allow update: if false;
+        allow delete: if activeMember(householdId);
       }
 
       match /categories/{categoryId} {

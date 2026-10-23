@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Camera, Check, ChevronLeft, CircleAlert, FileImage, LoaderCircle, Plus, Upload, X } from "lucide-react";
 import { CATEGORIES } from "../../lib/categories";
 import { isValidExpenseDate, localDateString } from "../../lib/dates";
-import { formatMoneyInput, parseAmountToMinor } from "../../lib/money";
+import { formatMoneyInput, MAX_INVESTMENT_AMOUNT_MINOR, parseAmountToMinor } from "../../lib/money";
 import { createExpense, updateExpense, type ExpenseInput } from "../../services/expenseService";
 import { validateReceiptFile } from "../../services/receiptService";
 import { extractReceiptFromImage } from "../../services/receiptOcr";
-import type { Category, Expense, Household } from "../../types";
+import type { Category, Expense, Household, InvestmentAccount, InvestmentHolding } from "../../types";
 import type { User } from "firebase/auth";
 
 type Mode = "manual" | "receipt";
@@ -16,6 +16,8 @@ export default function ExpenseOverlay({
   household,
   user,
   categories = CATEGORIES,
+  investmentAccounts = [],
+  investmentHoldings = [],
   receiptMode,
   expense,
   onClose,
@@ -24,6 +26,8 @@ export default function ExpenseOverlay({
   household: Household;
   user: User;
   categories?: Category[];
+  investmentAccounts?: InvestmentAccount[];
+  investmentHoldings?: InvestmentHolding[];
   receiptMode: boolean;
   expense: Expense | null;
   onClose: () => void;
@@ -36,6 +40,9 @@ export default function ExpenseOverlay({
   const [merchant, setMerchant] = useState(expense?.merchant ?? "");
   const [paymentMethod, setPaymentMethod] = useState(expense?.paymentMethod ?? "");
   const [notes, setNotes] = useState(expense?.notes ?? "");
+  const [trackInvestment, setTrackInvestment] = useState(Boolean(expense?.investmentAccountId));
+  const [investmentAccountId, setInvestmentAccountId] = useState(expense?.investmentAccountId ?? "");
+  const [investmentHoldingId, setInvestmentHoldingId] = useState(expense?.investmentHoldingId ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -59,6 +66,43 @@ export default function ExpenseOverlay({
   }, [onClose]);
 
   const subtitle = useMemo(() => expense ? "Make a change to this household expense." : "Keep it simple. You can add the details later.", [expense]);
+  const investmentTracked = categoryId === "investments" || trackInvestment;
+  const availableInvestmentHoldings = investmentHoldings.filter((holding) => holding.accountId === investmentAccountId);
+
+  function investmentAssignment() {
+    return (
+      <>
+        {categoryId !== "investments" && (
+          <label className="investment-toggle">
+            <input type="checkbox" checked={trackInvestment} onChange={(event) => setTrackInvestment(event.target.checked)} />
+            <span>Track this expense as an investment contribution</span>
+          </label>
+        )}
+        {investmentTracked && (
+          <label className="field">
+            <span>Investment account</span>
+            <select value={investmentAccountId} onChange={(event) => { setInvestmentAccountId(event.target.value); setInvestmentHoldingId(""); }} required>
+              <option value="">Choose an account</option>
+              {investmentAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+            </select>
+            {investmentAccounts.length === 0 && <small>Add an account from the Investments page before saving.</small>}
+          </label>
+        )}
+        {investmentTracked && investmentAccountId && (
+          <label className="field">
+            <span>Portfolio asset <em>Optional</em></span>
+            <select value={investmentHoldingId} onChange={(event) => setInvestmentHoldingId(event.target.value)}>
+              <option value="">Account only (no specific asset)</option>
+              {availableInvestmentHoldings.map((holding) => (
+                <option key={holding.id} value={holding.id}>{holding.name}{holding.ticker ? ` · ${holding.ticker}` : ""}</option>
+              ))}
+            </select>
+            {availableInvestmentHoldings.length === 0 && <small>Add an asset under this account to link contributions directly to it.</small>}
+          </label>
+        )}
+      </>
+    );
+  }
 
   function discardReceipt() {
     if (fileInput.current) fileInput.current.value = "";
@@ -73,9 +117,11 @@ export default function ExpenseOverlay({
     setBusy(true);
     try {
       const input: ExpenseInput = {
-        amountMinor: parseAmountToMinor(amount),
+        amountMinor: parseAmountToMinor(amount, investmentTracked ? MAX_INVESTMENT_AMOUNT_MINOR : undefined),
         merchant: merchant.trim() || null,
         categoryId,
+        investmentAccountId: investmentTracked ? investmentAccountId || null : null,
+        investmentHoldingId: investmentTracked ? investmentHoldingId || null : null,
         expenseDate: date,
         paymentMethod: paymentMethod ? paymentMethod as ExpenseInput["paymentMethod"] : null,
         source: expense?.source ?? "manual",
@@ -135,11 +181,13 @@ export default function ExpenseOverlay({
     setBusy(true);
     setError("");
     try {
-      const amountMinor = parseAmountToMinor(amount);
+      const amountMinor = parseAmountToMinor(amount, investmentTracked ? MAX_INVESTMENT_AMOUNT_MINOR : undefined);
       await createExpense(household.id, {
         amountMinor,
         merchant: merchant.trim() || null,
         categoryId,
+        investmentAccountId: investmentTracked ? investmentAccountId || null : null,
+        investmentHoldingId: investmentTracked ? investmentHoldingId || null : null,
         expenseDate: date,
         paymentMethod: paymentMethod ? paymentMethod as ExpenseInput["paymentMethod"] : null,
         notes,
@@ -163,6 +211,7 @@ export default function ExpenseOverlay({
           <form className="expense-form" onSubmit={saveManual}>
             <label className="field amount-field"><span>Amount</span><div className="money-input"><span>$</span><input autoFocus={!expense} inputMode="decimal" aria-label="Amount in pesos" placeholder="0.00" value={amount} onChange={(event) => setAmount(event.target.value)} required /></div><small>MXN · Mexican pesos</small></label>
             <label className="field"><span>Category</span><select value={categoryId} onChange={(event) => setCategoryId(event.target.value)} required>{categories.map((category) => <option key={category.id} value={category.id}>{category.icon} &nbsp; {category.name}</option>)}</select></label>
+            {investmentAssignment()}
             <div className="form-grid"><label className="field"><span>Date</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></label><label className="field"><span>Merchant <em>Optional</em></span><input value={merchant} onChange={(event) => setMerchant(event.target.value)} placeholder="Where did you spend?" maxLength={120} /></label></div>
             <details className="optional-details"><summary>Payment & notes <span>Optional</span></summary><div className="form-grid optional-fields"><label className="field"><span>Payment method</span><select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option value="">Not specified</option><option value="cash">Cash</option><option value="debit_card">Debit card</option><option value="credit_card">Credit card</option><option value="bank_transfer">Bank transfer</option><option value="other">Other</option></select></label><label className="field"><span>Notes</span><input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add a note…" maxLength={500} /></label></div></details>
             {error && <p className="form-error" role="alert">{error}</p>}
@@ -179,6 +228,7 @@ export default function ExpenseOverlay({
               <label className="field amount-field"><span>Final payable total</span><div className="money-input"><span>$</span><input inputMode="decimal" aria-label="Extracted total in pesos" value={amount} onChange={(event) => setAmount(event.target.value)} required /></div><small>MXN · Review this amount against the receipt</small></label>
               <label className="field"><span>Merchant <em>Optional</em></span><input value={merchant} onChange={(event) => setMerchant(event.target.value)} placeholder="Merchant name" maxLength={120} /></label>
               <div className="form-grid"><label className="field"><span>Date</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></label><label className="field"><span>Suggested category</span><select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>{categories.map((category) => <option key={category.id} value={category.id}>{category.icon} &nbsp; {category.name}</option>)}</select></label></div>
+              {investmentAssignment()}
               <details className="optional-details"><summary>Payment & notes <span>Optional</span></summary><div className="form-grid optional-fields"><label className="field"><span>Payment method</span><select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}><option value="">Not specified</option><option value="cash">Cash</option><option value="debit_card">Debit card</option><option value="credit_card">Credit card</option><option value="bank_transfer">Bank transfer</option><option value="other">Other</option></select></label><label className="field"><span>Notes</span><input value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Add a note…" maxLength={500} /></label></div></details>
               {error && <p className="review-warning">{error}</p>}
               <footer className="modal-footer"><button type="button" className="button button-quiet" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={busy}>{busy ? <><LoaderCircle className="spin" size={16} /> Saving…</> : <>Confirm expense <Check size={16} /></>}</button></footer>

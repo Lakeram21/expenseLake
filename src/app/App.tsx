@@ -3,16 +3,22 @@ import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import {
   Activity, ArrowDownLeft, ArrowLeft, ArrowRight, ChevronDown, CircleHelp,
   FileBarChart2, Home, LayoutDashboard, LogOut, Menu, Plus, Settings,
-  ShieldCheck, Wallet, X,
+  ShieldCheck, TrendingUp, Wallet, X,
 } from "lucide-react";
 import { auth, firebaseConfigured } from "../lib/firebase";
 import { listExpenses } from "../services/expenseService";
 import { getUserHousehold } from "../services/householdService";
 import { listBudgets } from "../services/budgetService";
 import { listCategories } from "../services/categoryService";
+import {
+  listInvestmentAccounts, listInvestmentHoldings, listInvestmentIncome, listInvestmentValuations,
+} from "../services/investmentService";
 import { monthString, addMonths, formatMonth } from "../lib/dates";
 import { CATEGORIES } from "../lib/categories";
-import type { Budget, Category, Expense, Household } from "../types";
+import type {
+  Budget, Category, Expense, Household, InvestmentAccount, InvestmentHolding,
+  InvestmentIncome, InvestmentValuation,
+} from "../types";
 import AuthScreen from "./AuthScreen";
 import HouseholdSetup from "./HouseholdSetup";
 const Dashboard = lazy(() => import("../features/dashboard/Dashboard"));
@@ -20,11 +26,13 @@ const ExpensesPage = lazy(() => import("../features/expenses/ExpensesPage"));
 const BudgetsPage = lazy(() => import("../features/budgets/BudgetsPage"));
 const ReportsPage = lazy(() => import("../features/reports/ReportsPage"));
 const SettingsPage = lazy(() => import("../features/household/SettingsPage"));
+const InvestmentsPage = lazy(() => import("../features/investments/InvestmentsPage"));
 
-type Page = "dashboard" | "expenses" | "budgets" | "reports" | "settings";
+type Page = "dashboard" | "expenses" | "investments" | "budgets" | "reports" | "settings";
 const navItems: { id: Page; label: string; icon: typeof Home }[] = [
   { id: "dashboard", label: "Overview", icon: LayoutDashboard },
   { id: "expenses", label: "Expenses", icon: ArrowDownLeft },
+  { id: "investments", label: "Investments", icon: TrendingUp },
   { id: "budgets", label: "Budgets", icon: Wallet },
   { id: "reports", label: "Reports", icon: FileBarChart2 },
   { id: "settings", label: "Settings", icon: Settings },
@@ -40,6 +48,10 @@ export default function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [month, setMonth] = useState(monthString());
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [investmentAccounts, setInvestmentAccounts] = useState<InvestmentAccount[]>([]);
+  const [investmentHoldings, setInvestmentHoldings] = useState<InvestmentHolding[]>([]);
+  const [investmentIncome, setInvestmentIncome] = useState<InvestmentIncome[]>([]);
+  const [investmentValuations, setInvestmentValuations] = useState<InvestmentValuation[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [categories, setCategories] = useState<Category[]>(CATEGORIES);
   const [loading, setLoading] = useState(false);
@@ -79,14 +91,25 @@ export default function App() {
     setLoading(true);
     setLoadError("");
     try {
-      const [nextExpenses, nextBudgets, nextCategories] = await Promise.all([
+      const [
+        nextExpenses, nextBudgets, nextCategories, nextInvestmentAccounts,
+        nextInvestmentValuations, nextInvestmentHoldings, nextInvestmentIncome,
+      ] = await Promise.all([
         listExpenses(household.id),
         listBudgets(household.id, month),
         listCategories(household.id),
+        listInvestmentAccounts(household.id),
+        listInvestmentValuations(household.id),
+        listInvestmentHoldings(household.id),
+        listInvestmentIncome(household.id),
       ]);
       setExpenses(nextExpenses);
       setBudgets(nextBudgets);
       setCategories(nextCategories);
+      setInvestmentAccounts(nextInvestmentAccounts);
+      setInvestmentValuations(nextInvestmentValuations);
+      setInvestmentHoldings(nextInvestmentHoldings);
+      setInvestmentIncome(nextInvestmentIncome);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "Couldn't load your household data.");
     } finally {
@@ -114,6 +137,10 @@ export default function App() {
     user,
     month,
     expenses,
+    investmentAccounts,
+    investmentHoldings,
+    investmentIncome,
+    investmentValuations,
     budgets,
     categories,
     loading,
@@ -122,6 +149,7 @@ export default function App() {
     onScanReceipt: () => startExpense(true),
     onViewExpenses: () => setPage("expenses"),
     onViewReports: () => setPage("reports"),
+    onViewInvestments: () => setPage("investments"),
     onEditExpense: (expense: Expense) => {
       setExpenseToEdit(expense);
       setInitialReceiptMode(false);
@@ -146,8 +174,7 @@ export default function App() {
           <button className="mobile-menu-button icon-button" aria-label="Open navigation" onClick={() => setShowMobileMenu(true)}><Menu size={20} /></button>
           <div className="breadcrumb"><span>{household.name}</span><span className="crumb-slash">/</span><strong>{navItems.find((item) => item.id === page)?.label}</strong></div>
           <div className="topbar-actions">
-            <button className="month-switch" aria-label="Previous month" onClick={() => setMonth(addMonths(month, -1))}><ArrowLeft size={16} /></button><span className="month-current">{formatMonth(month)}</span><button className="month-switch" aria-label="Next month" onClick={() => setMonth(addMonths(month, 1))} disabled={month >= monthString()}><ArrowRight size={16} /></button>
-            <span className="topbar-divider" />
+            {page !== "investments" && <><button className="month-switch" aria-label="Previous month" onClick={() => setMonth(addMonths(month, -1))}><ArrowLeft size={16} /></button><span className="month-current">{formatMonth(month)}</span><button className="month-switch" aria-label="Next month" onClick={() => setMonth(addMonths(month, 1))} disabled={month >= monthString()}><ArrowRight size={16} /></button><span className="topbar-divider" /></>}
             <button className="help-button" onClick={() => setPage("settings")}><CircleHelp size={17} /><span>Help</span></button>
           </div>
         </header>
@@ -158,6 +185,7 @@ export default function App() {
             {page === "dashboard" && <Dashboard {...contentProps} greeting={greeting} />}
             {page === "expenses" && <ExpensesPage {...contentProps} />}
             {page === "budgets" && <BudgetsPage {...contentProps} />}
+            {page === "investments" && <InvestmentsPage {...contentProps} />}
             {page === "reports" && <ReportsPage {...contentProps} />}
             {page === "settings" && <SettingsPage household={household} user={user} />}
           </Suspense>
@@ -167,7 +195,7 @@ export default function App() {
           <button className="mobile-add" onClick={() => startExpense(false)} aria-label="Add expense"><Plus size={24} /></button>
           {navItems.slice(2, 4).map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? "active" : ""} onClick={() => setPage(id)}><Icon size={19} /><span>{label}</span></button>)}
         </nav>
-        {openExpenseForm && <ExpenseOverlay household={household} user={user} categories={categories} receiptMode={initialReceiptMode} expense={expenseToEdit} onClose={() => { setOpenExpenseForm(false); setExpenseToEdit(null); }} onSaved={() => { setOpenExpenseForm(false); setExpenseToEdit(null); void refreshData(); }} />}
+        {openExpenseForm && <ExpenseOverlay household={household} user={user} categories={categories} investmentAccounts={investmentAccounts} investmentHoldings={investmentHoldings} receiptMode={initialReceiptMode} expense={expenseToEdit} onClose={() => { setOpenExpenseForm(false); setExpenseToEdit(null); }} onSaved={() => { setOpenExpenseForm(false); setExpenseToEdit(null); void refreshData(); }} />}
       </main>
       {showMobileMenu && <div className="mobile-drawer-backdrop" onClick={() => setShowMobileMenu(false)}><aside className="mobile-drawer" onClick={(event) => event.stopPropagation()}><div className="drawer-head"><a className="brand"><span className="brand-mark"><Activity size={18} /></span> expenselake</a><button className="icon-button" onClick={() => setShowMobileMenu(false)} aria-label="Close navigation"><X size={19} /></button></div>{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${page === id ? "selected" : ""}`} onClick={() => { setPage(id); setShowMobileMenu(false); }}><Icon size={18} />{label}</button>)}</aside></div>}
       <button className="floating-add" onClick={() => startExpense(false)}><Plus size={18} /> Add expense</button>

@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { User } from "firebase/auth";
-import type { Expense, Household } from "../../types";
+import type { Expense, Household, InvestmentAccount, InvestmentHolding } from "../../types";
 
 const mockedServices = vi.hoisted(() => ({
   createExpense: vi.fn(),
@@ -28,6 +28,30 @@ import ExpenseOverlay from "./ExpenseOverlay";
 
 const household: Household = { id: "home-1", name: "Casa", ownerUid: "user-1", currency: "MXN" };
 const user = { uid: "user-1", displayName: "Ana", email: "ana@example.com" } as User;
+const investmentAccount: InvestmentAccount = {
+  id: "cetes",
+  name: "Cetesdirecto",
+  type: "government_bonds",
+  provider: "Cetesdirecto",
+  notes: "",
+  createdAt: new Date("2026-01-01"),
+};
+const investmentHolding: InvestmentHolding = {
+  id: "etf-1",
+  accountId: investmentAccount.id,
+  name: "S&P 500 ETF",
+  kind: "etf",
+  ticker: "SP500",
+  currency: "USD",
+  incomeFrequency: "none",
+  nextPaymentDate: null,
+  amountInvestedMinor: 500000,
+  currentValueMinor: 600000,
+  currentValueDate: "2026-10-01",
+  notes: "",
+  createdAt: new Date("2026-01-01"),
+  updatedAt: new Date("2026-01-01"),
+};
 
 afterEach(() => {
   cleanup();
@@ -84,6 +108,71 @@ describe("expense entry", () => {
       "home-1",
       "expense-7",
       expect.objectContaining({ amountMinor: 6250, categoryId: "dining" }),
+    ));
+  });
+
+  it("links an investment-category expense to the selected investment account", async () => {
+    mockedServices.createExpense.mockResolvedValue("investment-expense");
+    const actor = userEvent.setup();
+    render(<ExpenseOverlay household={household} user={user} investmentAccounts={[investmentAccount]} receiptMode={false} expense={null} onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    await actor.type(screen.getByRole("textbox", { name: "Amount in pesos" }), "100.00");
+    await actor.selectOptions(screen.getByLabelText("Category"), "investments");
+    await actor.selectOptions(screen.getByLabelText("Investment account"), "cetes");
+    await actor.click(screen.getByRole("button", { name: /Save expense/ }));
+
+    await waitFor(() => expect(mockedServices.createExpense).toHaveBeenCalledWith(
+      "home-1",
+      expect.objectContaining({ categoryId: "investments", investmentAccountId: "cetes", amountMinor: 10000 }),
+      { uid: "user-1", displayName: "Ana" },
+    ));
+  });
+
+  it("links a contribution to an optional asset inside the selected account", async () => {
+    mockedServices.createExpense.mockResolvedValue("investment-expense");
+    const actor = userEvent.setup();
+    render(<ExpenseOverlay
+      household={household}
+      user={user}
+      investmentAccounts={[investmentAccount]}
+      investmentHoldings={[investmentHolding]}
+      receiptMode={false}
+      expense={null}
+      onClose={vi.fn()}
+      onSaved={vi.fn()}
+    />);
+
+    await actor.type(screen.getByRole("textbox", { name: "Amount in pesos" }), "250");
+    await actor.selectOptions(screen.getByLabelText("Category"), "investments");
+    await actor.selectOptions(screen.getByLabelText("Investment account"), investmentAccount.id);
+    await actor.selectOptions(screen.getByLabelText(/Portfolio asset/), investmentHolding.id);
+    await actor.click(screen.getByRole("button", { name: /Save expense/ }));
+
+    await waitFor(() => expect(mockedServices.createExpense).toHaveBeenCalledWith(
+      household.id,
+      expect.objectContaining({
+        investmentAccountId: investmentAccount.id,
+        investmentHoldingId: investmentHolding.id,
+        amountMinor: 25000,
+      }),
+      { uid: user.uid, displayName: "Ana" },
+    ));
+  });
+
+  it("can track an expense from another category as an investment contribution", async () => {
+    mockedServices.createExpense.mockResolvedValue("linked-expense");
+    const actor = userEvent.setup();
+    render(<ExpenseOverlay household={household} user={user} investmentAccounts={[investmentAccount]} receiptMode={false} expense={null} onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    await actor.type(screen.getByRole("textbox", { name: "Amount in pesos" }), "50");
+    await actor.click(screen.getByLabelText("Track this expense as an investment contribution"));
+    await actor.selectOptions(screen.getByLabelText("Investment account"), "cetes");
+    await actor.click(screen.getByRole("button", { name: /Save expense/ }));
+
+    await waitFor(() => expect(mockedServices.createExpense).toHaveBeenCalledWith(
+      "home-1",
+      expect.objectContaining({ categoryId: "groceries", investmentAccountId: "cetes", amountMinor: 5000 }),
+      { uid: "user-1", displayName: "Ana" },
     ));
   });
 
