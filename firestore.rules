@@ -365,10 +365,7 @@ service cloud.firestore {
 
     match /householdInvitations/{invitationId} {
       allow get: if signedIn()
-        && resource.data.email == request.auth.token.email
-        && resource.data.status == 'pending'
-        && resource.data.expiresAt is timestamp
-        && resource.data.expiresAt > request.time;
+        && resource.data.email == request.auth.token.email.lower();
       allow list: if false;
       allow create: if householdOwner(request.resource.data.householdId)
         && invitationId.matches('^[a-f0-9]{64}$')
@@ -387,7 +384,7 @@ service cloud.firestore {
         && resource.data.status == 'pending'
         && resource.data.expiresAt is timestamp
         && resource.data.expiresAt > request.time
-        && resource.data.email == request.auth.token.email
+        && resource.data.email == request.auth.token.email.lower()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedBy', 'acceptedAt'])
         && request.resource.data.status == 'accepted'
         && request.resource.data.acceptedBy == request.auth.uid

@@ -9,6 +9,7 @@ import {
   Timestamp,
   updateDoc,
 } from "firebase/firestore";
+import { FirebaseError } from "firebase/app";
 import { db } from "../lib/firebase";
 import type { Household, HouseholdMember } from "../types";
 
@@ -96,41 +97,50 @@ export async function acceptInvitation(
   const normalizedCode = code.trim().toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(normalizedCode)) throw new Error("Enter a valid invitation code.");
   const invitationRef = doc(database(), "householdInvitations", normalizedCode);
-  await runTransaction(database(), async (transaction) => {
-    const invitation = await transaction.get(invitationRef);
-    const inviteData = invitation.data();
-    if (!invitation.exists() || inviteData?.status !== "pending" || !(inviteData.expiresAt instanceof Timestamp) || inviteData.expiresAt.toMillis() <= Date.now()) {
-      throw new Error("This invitation has expired or was already used.");
-    }
-    if (inviteData.email !== user.email.trim().toLowerCase()) {
-      throw new Error("This invitation was created for a different email address.");
-    }
-    if (typeof inviteData.householdId !== "string") throw new Error("This invitation is invalid.");
-    const householdRef = doc(database(), "households", inviteData.householdId);
-    const memberRef = doc(householdRef, "members", user.uid);
-    const userRef = doc(database(), "users", user.uid);
-    const profile = await transaction.get(userRef);
-    const now = serverTimestamp();
-    transaction.set(memberRef, {
-      role: "member",
-      active: true,
-      joinedAt: now,
-      invitationId: normalizedCode,
+  try {
+    await runTransaction(database(), async (transaction) => {
+      const invitation = await transaction.get(invitationRef);
+      const inviteData = invitation.data();
+      if (!invitation.exists() || inviteData?.status !== "pending" || !(inviteData.expiresAt instanceof Timestamp) || inviteData.expiresAt.toMillis() <= Date.now()) {
+        throw new Error("This invitation has expired or was already used.");
+      }
+      if (inviteData.email !== user.email.trim().toLowerCase()) {
+        throw new Error("This invitation was created for a different email address.");
+      }
+      if (typeof inviteData.householdId !== "string") throw new Error("This invitation is invalid.");
+      const householdRef = doc(database(), "households", inviteData.householdId);
+      const memberRef = doc(householdRef, "members", user.uid);
+      const userRef = doc(database(), "users", user.uid);
+      const profile = await transaction.get(userRef);
+      const now = serverTimestamp();
+      transaction.set(memberRef, {
+        role: "member",
+        active: true,
+        joinedAt: now,
+        invitationId: normalizedCode,
+      });
+      transaction.update(householdRef, { memberCount: 2, updatedAt: now });
+      transaction.update(invitationRef, {
+        status: "accepted",
+        acceptedBy: user.uid,
+        acceptedAt: now,
+      });
+      transaction.set(userRef, {
+        displayName: user.displayName,
+        email: user.email.trim().toLowerCase(),
+        defaultHouseholdId: inviteData.householdId,
+        ...(profile.exists() ? {} : { createdAt: now }),
+        updatedAt: now,
+      }, { merge: true });
     });
-    transaction.update(householdRef, { memberCount: 2, updatedAt: now });
-    transaction.update(invitationRef, {
-      status: "accepted",
-      acceptedBy: user.uid,
-      acceptedAt: now,
-    });
-    transaction.set(userRef, {
-      displayName: user.displayName,
-      email: user.email.trim().toLowerCase(),
-      defaultHouseholdId: inviteData.householdId,
-      ...(profile.exists() ? {} : { createdAt: now }),
-      updatedAt: now,
-    }, { merge: true });
-  });
+  } catch (caught) {
+    if (caught instanceof FirebaseError && caught.code === "permission-denied") {
+      throw new Error(
+        "Couldn't access this invitation. Make sure you're signed in with the invited email and ask the household owner for a new invitation if the problem continues.",
+      );
+    }
+    throw caught;
+  }
 }
 
 export async function updateDefaultHousehold(uid: string, householdId: string): Promise<void> {

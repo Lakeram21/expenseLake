@@ -244,7 +244,7 @@ describe.skipIf(!emulatorConfigured)("Firestore household security rules", () =>
       status: "pending",
     }));
 
-    const visitor = environment.authenticatedContext("visitor", { email: "visitor@example.com" }).firestore();
+    const visitor = environment.authenticatedContext("visitor", { email: "VISITOR@EXAMPLE.COM" }).firestore();
     await assertSucceeds(runTransaction(visitor, async (transaction) => {
       const currentInvite = await transaction.get(doc(visitor, `householdInvitations/${invitationId}`));
       const profile = doc(visitor, "users/visitor");
@@ -274,6 +274,30 @@ describe.skipIf(!emulatorConfigured)("Firestore household security rules", () =>
         updatedAt: serverTimestamp(),
       });
     }));
+  });
+
+  it("lets only the invited email inspect expired or already-used invitations", async () => {
+    const invitationIds = ["b".repeat(64), "c".repeat(64)];
+    await environment.withSecurityRulesDisabled(async (context) => {
+      const firestore = context.firestore();
+      await setDoc(doc(firestore, `householdInvitations/${invitationIds[0]}`), {
+        email: "visitor@example.com",
+        status: "pending",
+        expiresAt: Timestamp.fromMillis(Date.now() - 1000),
+      });
+      await setDoc(doc(firestore, `householdInvitations/${invitationIds[1]}`), {
+        email: "visitor@example.com",
+        status: "accepted",
+        expiresAt: Timestamp.fromMillis(Date.now() + 60_000),
+      });
+    });
+
+    const visitor = environment.authenticatedContext("visitor", { email: "VISITOR@EXAMPLE.COM" }).firestore();
+    const otherUser = environment.authenticatedContext("other-user", { email: "other@example.com" }).firestore();
+    for (const invitationId of invitationIds) {
+      await assertSucceeds(getDoc(doc(visitor, `householdInvitations/${invitationId}`)));
+      await assertFails(getDoc(doc(otherUser, `householdInvitations/${invitationId}`)));
+    }
   });
 
   it("rejects invalid amounts and changes to a protected creator field", async () => {
